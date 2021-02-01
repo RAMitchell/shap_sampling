@@ -6,7 +6,9 @@ import sklearn
 
 
 @pytest.mark.parametrize("data", [datasets.get_cal_housing(5, 10), datasets.get_regression(5, 10)])
-@pytest.mark.parametrize("alg", [algorithms.castro, algorithms.castro_complement])
+@pytest.mark.parametrize("alg",
+                         [algorithms.castro, algorithms.castro_complement, algorithms.castro_qmc,
+                          algorithms.castro_lhs])
 def test_efficiency(data, alg):
     model, X_background, X_foreground, exact_shap_values = data
     n_features = X_background.shape[1]
@@ -19,7 +21,9 @@ def test_efficiency(data, alg):
 
 
 @pytest.mark.parametrize("alg", [algorithms.castro, algorithms.castro_complement, algorithms.owen,
-                                 algorithms.owen_complement])
+                                 algorithms.owen_complement, algorithms.castro_stratified,
+                                 algorithms.castro_qmc, algorithms.castro_qmc,
+                                 algorithms.castro_lhs])
 def test_permutation(alg):
     X, y = sklearn.datasets.fetch_california_housing(return_X_y=True)
     # Train arbitrary model to get some coefficients
@@ -40,27 +44,32 @@ rows_predict_count = 0
 
 # Test if any of our algorithms are cheating and using more function calls then they should
 @pytest.mark.parametrize("alg", [algorithms.castro, algorithms.castro_complement, algorithms.owen,
-                                 algorithms.owen_complement])
+                                 algorithms.owen_complement, algorithms.global_stratified,
+                                 algorithms.global_stratified_complement,
+                                 algorithms.castro_stratified, algorithms.castro_qmc,
+                                 algorithms.castro_lhs])
 def test_num_function_calls(alg):
+    np.random.seed(978)
     global rows_predict_count
 
     def predict(X):
         global rows_predict_count
         rows_predict_count += X.shape[0]
-        return np.zeros(X.shape[0])
+        return np.random.random(X.shape[0])
 
     n_features = 5
     X_background = np.zeros((10, 5))
     X_foreground = np.zeros((2, 5))
 
     min_samples = algorithms.min_sample_size(alg, n_features)
-    alg(X_background, X_foreground, predict, min_samples)
-    assert rows_predict_count == 10 * 2 * 2 * min_samples
+    alg(X_background, X_foreground, predict, min_samples * 2)
+    assert rows_predict_count == 10 * 2 * 2 * min_samples * 2
     rows_predict_count = 0
 
 
 @pytest.mark.parametrize("alg", [algorithms.castro, algorithms.castro_complement, algorithms.owen,
-                                 algorithms.owen_complement])
+                                 algorithms.owen_complement, algorithms.castro_stratified,
+                                 algorithms.castro_qmc, algorithms.castro_lhs])
 def test_basic(alg):
     def predict(x):
         return x[:, 0]
@@ -69,9 +78,40 @@ def test_basic(alg):
 
     X_background = np.zeros((2, n_features))
     X_foreground = np.ones((1, n_features))
-
+    np.random.seed(11)
     shap_values = alg(X_background, X_foreground, predict,
                       algorithms.min_sample_size(alg, n_features))
     assert shap_values[0][0] == 1.0
     assert shap_values[0][1] == 0.0
     assert shap_values[0][2] == 0.0
+
+
+def rmse(a, b):
+    return np.sqrt(((a - b) ** 2).mean())
+
+
+def test_castro_stratified():
+    import xgboost as xgb
+    import shap
+    np.random.seed(11)
+    n_foreground = 5
+    n_background = 10
+    X, y = sklearn.datasets.make_regression(
+        n_samples=10,
+        n_features=3,
+        noise=0.1,
+        random_state=47)
+    model = xgb.XGBRegressor().fit(X, y)
+    X_foreground = X[:n_foreground]
+    X_background = X[:n_background]
+    tree_explainer = shap.TreeExplainer(model, X_background)
+    exact_shap_values = tree_explainer.shap_values(X_foreground)
+
+    errors = []
+    for i in [1, 10, 100]:
+        shap_values = algorithms.castro_stratified(X_background, X_foreground, model.predict,
+                                                   algorithms.min_sample_size(
+                                                       algorithms.castro_stratified,
+                                                       3) * i)
+        errors.append(rmse(exact_shap_values, shap_values))
+    assert np.all(np.diff(errors) < 0)
