@@ -4,11 +4,37 @@ import algorithms
 import numpy as np
 import sklearn
 
+all_algorithms = [algorithms.castro, algorithms.castro_complement, algorithms.owen,
+                  algorithms.owen_complement, algorithms.castro_stratified,
+                  algorithms.castro_qmc, algorithms.castro_qmc,
+                  algorithms.castro_lhs,
+                  algorithms.kt_herding, algorithms.spearman_herding,
+                  algorithms.castro_control_variate, algorithms.orthogonal]
+
+efficient_algorithms = [algorithms.castro, algorithms.castro_complement, algorithms.castro_qmc,
+                        algorithms.castro_lhs, algorithms.kt_herding, algorithms.spearman_herding,
+                        algorithms.orthogonal]
+
+algorithms_with_consistent_function_calls = [algorithms.castro, algorithms.castro_complement,
+                                             algorithms.owen,
+                                             algorithms.owen_complement,
+                                             algorithms.global_stratified,
+                                             algorithms.global_stratified_complement,
+                                             algorithms.castro_stratified, algorithms.castro_qmc,
+                                             algorithms.castro_lhs, algorithms.kt_herding,
+                                             algorithms.spearman_herding, algorithms.orthogonal]
+
+algorithms_exact_linear_model = [algorithms.castro, algorithms.castro_complement, algorithms.owen,
+                                 algorithms.owen_complement, algorithms.castro_stratified,
+                                 algorithms.castro_qmc, algorithms.castro_qmc,
+                                 algorithms.castro_lhs,
+                                 algorithms.kt_herding, algorithms.spearman_herding,
+                                 algorithms.orthogonal]
+
 
 @pytest.mark.parametrize("data", [datasets.get_cal_housing(5, 10), datasets.get_regression(5, 10)])
 @pytest.mark.parametrize("alg",
-                         [algorithms.castro, algorithms.castro_complement, algorithms.castro_qmc,
-                          algorithms.castro_lhs])
+                         efficient_algorithms)
 def test_efficiency(data, alg):
     model, X_background, X_foreground, exact_shap_values = data
     n_features = X_background.shape[1]
@@ -20,11 +46,8 @@ def test_efficiency(data, alg):
     assert np.allclose(y, shap_sum)
 
 
-@pytest.mark.parametrize("alg", [algorithms.castro, algorithms.castro_complement, algorithms.owen,
-                                 algorithms.owen_complement, algorithms.castro_stratified,
-                                 algorithms.castro_qmc, algorithms.castro_qmc,
-                                 algorithms.castro_lhs])
-def test_permutation(alg):
+@pytest.mark.parametrize("alg", algorithms_exact_linear_model)
+def test_linear_model(alg):
     X, y = sklearn.datasets.fetch_california_housing(return_X_y=True)
     # Train arbitrary model to get some coefficients
     mod = sklearn.linear_model.LinearRegression().fit(X, y)
@@ -43,11 +66,7 @@ rows_predict_count = 0
 
 
 # Test if any of our algorithms are cheating and using more function calls then they should
-@pytest.mark.parametrize("alg", [algorithms.castro, algorithms.castro_complement, algorithms.owen,
-                                 algorithms.owen_complement, algorithms.global_stratified,
-                                 algorithms.global_stratified_complement,
-                                 algorithms.castro_stratified, algorithms.castro_qmc,
-                                 algorithms.castro_lhs])
+@pytest.mark.parametrize("alg", algorithms_with_consistent_function_calls)
 def test_num_function_calls(alg):
     np.random.seed(978)
     global rows_predict_count
@@ -67,9 +86,7 @@ def test_num_function_calls(alg):
     rows_predict_count = 0
 
 
-@pytest.mark.parametrize("alg", [algorithms.castro, algorithms.castro_complement, algorithms.owen,
-                                 algorithms.owen_complement, algorithms.castro_stratified,
-                                 algorithms.castro_qmc, algorithms.castro_lhs])
+@pytest.mark.parametrize("alg", algorithms_exact_linear_model)
 def test_basic(alg):
     def predict(x):
         return x[:, 0]

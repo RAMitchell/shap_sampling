@@ -1,6 +1,7 @@
 import numpy as np
 from numba import njit
 import sobol_seq
+import kernel_herding
 
 
 @njit
@@ -144,7 +145,7 @@ def castro_qmc(X_background, X_foreground, predict_function, n_samples):
     assert n_samples % (n_features + 1) == 0
     # castro is allowed to take 2 * more samples than owen as it reuses predictions
     samples_per_feature = 2 * (n_samples // (n_features + 1))
-    p = sobol_permutations(samples_per_feature, n_features)
+    p = sobol_sphere_permutations(samples_per_feature, n_features)
     return estimate_shap_given_permutations(X_background, X_foreground, predict_function, p)
 
 
@@ -161,25 +162,15 @@ def real_samples_to_permutations(X, n_features):
     return p
 
 
-def sobol_permutations(n_samples, n_features):
+def sobol_fy_permutations(n_samples, n_features):
     sobol = sobol_seq.i4_sobol_generate(n_features - 1, n_samples)
     return real_samples_to_permutations(sobol, n_features)
 
 
-def castro_complement_qmc(X_background, X_foreground, predict_function, n_samples):
-    n_features = X_background.shape[1]
+def sobol_sphere_permutations(n_samples, n_features):
+    sobol = sobol_seq.i4_sobol_generate(n_features, n_samples)
 
-    assert n_samples % (2 * (n_features + 1)) == 0
-    # castro is allowed to take 2 * more samples than owen as it reuses predictions
-    samples_per_feature = 2 * (n_samples // (n_features + 1))
-    p = np.zeros((samples_per_feature, n_features), dtype=np.int64)
-
-    p[0:samples_per_feature // 2] = sobol_permutations(samples_per_feature // 2, n_features)
-
-    # Reverse samples
-    for i in range(samples_per_feature // 2):
-        p[i + samples_per_feature // 2] = np.flip(p[i])
-    return estimate_shap_given_permutations(X_background, X_foreground, predict_function, p)
+    return np.argsort(sobol, axis=1)
 
 
 def get_lhs_permutations(n_samples, n_features):
@@ -370,6 +361,111 @@ def castro_stratified(X_background, X_foreground, predict_function, n_samples):
     return phi
 
 
+def correlation(a, b):
+    a_mean = a.mean()
+    b_mean = b.mean()
+    cov = 0.0
+    var = 0.0
+    for i in range(len(a)):
+        cov += (a[i] - a_mean) * (b[i] - b_mean)
+        var += (b[i] - b_mean) * (b[i] - b_mean)
+    return cov / var
+
+
+def castro_control_variate(X_background, X_foreground, predict_function, n_samples):
+    n_features = X_background.shape[1]
+
+    # Train tree model
+    from sklearn import tree
+    import shap
+    from sklearn.utils import resample
+    tree_training_X = resample(np.vstack((X_background, X_foreground)), n_samples=10000)
+    for i in range(n_features):
+        tree_training_X[:, i] = np.random.permutation(tree_training_X[:, i])
+    tree_training_y = predict_function(tree_training_X)
+    tree_model = tree.DecisionTreeRegressor().fit(tree_training_X, tree_training_y)
+    # estimate correlation using predictions on background set
+    beta = correlation(tree_model.predict(X_background), predict_function(X_background))
+    difference_predict = lambda X: predict_function(X) - beta * tree_model.predict(X)
+    tree_explainer = shap.TreeExplainer(tree_model, X_background)
+    tree_phi = tree_explainer.shap_values(X_foreground, check_additivity=False)
+    phi = castro(X_background, X_foreground, difference_predict, n_samples)
+    return phi + tree_phi * beta
+
+
+def kt_herding(X_background, X_foreground, predict_function, n_samples):
+    n_features = X_background.shape[1]
+    assert n_samples % (n_features + 1) == 0
+    # castro is allowed to take 2 * more samples than owen as it reuses predictions
+    samples_per_feature = 2 * (n_samples // (n_features + 1))
+    p = kernel_herding.kt_herding_permutations(samples_per_feature, n_features)
+    return estimate_shap_given_permutations(X_background, X_foreground, predict_function, p)
+
+
+def spearman_herding(X_background, X_foreground, predict_function, n_samples):
+    n_features = X_background.shape[1]
+    assert n_samples % (n_features + 1) == 0
+    # castro is allowed to take 2 * more samples than owen as it reuses predictions
+    samples_per_feature = 2 * (n_samples // (n_features + 1))
+    p = kernel_herding.spearman_kernel_herding_permutations(samples_per_feature, n_features)
+    return estimate_shap_given_permutations(X_background, X_foreground, predict_function, p)
+
+
+def spearman_herding_exact(X_background, X_foreground, predict_function, n_samples):
+    n_features = X_background.shape[1]
+    assert n_samples % (n_features + 1) == 0
+    # castro is allowed to take 2 * more samples than owen as it reuses predictions
+    samples_per_feature = 2 * (n_samples // (n_features + 1))
+    p = kernel_herding.spearman_kernel_herding_permutations_exact(samples_per_feature, n_features)
+    return estimate_shap_given_permutations(X_background, X_foreground, predict_function, p)
+
+
+def _sample_sphere(ndim):
+    vec = np.random.randn(ndim)
+    vec /= np.linalg.norm(vec, axis=0)
+    return vec
+
+
+def _gram_schmidt_permutations(n_orthogonal_samples, n_features):
+    assert n_orthogonal_samples < n_features
+    A = np.zeros((n_orthogonal_samples, n_features))
+    for i in range(n_orthogonal_samples):
+        A[i] = _sample_sphere(n_features)
+        for k in range(i):
+            A[i, :] -= np.dot(A[k, :], A[i, :]) * A[k, :]
+        A[i, :] = A[i, :] / np.linalg.norm(A[i, :])
+    p = np.zeros(A.shape, dtype=np.int64)
+    for i in range(n_orthogonal_samples):
+        p[i] = np.argsort(A[i])
+
+    return p
+
+
+def _orthogonal_permutations(n_samples, n_features):
+    p = np.zeros((n_samples, n_features), dtype=np.int64)
+    k = 8
+    i = 0
+    while i < n_samples // 2:
+        n_orthogonal_samples = min(min(k, n_features - 1), n_samples // 2 - i)
+        p[i:i + n_orthogonal_samples] = _gram_schmidt_permutations(n_orthogonal_samples, n_features
+                                                                   )
+        i += n_orthogonal_samples
+
+    # Reverse samples
+    for i in range(n_samples // 2):
+        p[i + n_samples // 2] = np.flip(p[i])
+    return p
+
+
+def orthogonal(X_background, X_foreground, predict_function, n_samples):
+    n_features = X_background.shape[1]
+    assert n_samples % (2 * (n_features + 1)) == 0
+    # castro is allowed to take 2 * more samples than owen as it reuses predictions
+    samples_per_feature = 2 * (n_samples // (n_features + 1))
+    p = _orthogonal_permutations(samples_per_feature, n_features)
+    return estimate_shap_given_permutations(X_background, X_foreground, predict_function, p)
+
+
 def min_sample_size(alg, n_features):
     if alg == castro:
         return n_features + 1
@@ -377,9 +473,17 @@ def min_sample_size(alg, n_features):
         return n_features + 1
     elif alg == castro_lhs:
         return n_features + 1
+    elif alg == kt_herding:
+        return n_features + 1
+    elif alg == spearman_herding:
+        return n_features + 1
+    elif alg == spearman_herding_exact:
+        return n_features + 1
+    elif alg == castro_control_variate:
+        return n_features + 1
     elif alg == castro_complement:
         return 2 * (n_features + 1)
-    elif alg == castro_complement_qmc:
+    elif alg == orthogonal:
         return 2 * (n_features + 1)
     elif alg == owen or alg == owen_complement:
         return n_features * 4

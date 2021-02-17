@@ -5,6 +5,8 @@ import matplotlib
 from tqdm import tqdm
 import algorithms
 import datasets
+import pandas as pd
+import seaborn as sns
 
 matplotlib.use('agg')
 plt.style.use("seaborn")
@@ -18,49 +20,62 @@ def rmse(a, b):
 def plot_experiments():
     repeats = 25
     foreground_examples = 10
-    background_examples = 10
-    max_evals = 5000
+    background_examples = 100
+    max_evals = 1000
     datasets_set = {
-        "make_regression": datasets.get_regression(foreground_examples, background_examples),
-        "cal_housing": datasets.get_cal_housing(foreground_examples, background_examples)}
+        # "make_regression": datasets.get_regression(foreground_examples, background_examples),
+        "cal_housing": datasets.get_cal_housing(foreground_examples, background_examples),
+        # "adult": datasets.get_adult(foreground_examples, background_examples),
+        # "breast_cancer": datasets.get_breast_cancer(foreground_examples, background_examples),
+    }
     algorithms_set = {
         "Castro": algorithms.castro,
         "Castro-Complement": algorithms.castro_complement,
-        "Castro-QMC": algorithms.castro_qmc,
-        "Castro-LHS": algorithms.castro_lhs,
+        # "Castro-LHS": algorithms.castro_lhs,
+    }
+    algorithms_set = {
+        # "Castro": algorithms.castro,
+        "Castro-Orthogonal": algorithms.orthogonal,
+        "Castro-Complement": algorithms.castro_complement,
+        # "Castro-ControlVariate": algorithms.castro_control_variate,
+        # "Castro-QMC": algorithms.castro_qmc,
+        # "KT-Herding": algorithms.kt_herding,
+        # "Spearman-Herding": algorithms.spearman_herding,
+        # "Spearman-Herding-Exact": algorithms.spearman_herding_exact,
     }
 
-    seed = 31
+    deterministic_algorithms = ["Castro-QMC"]
+
+    seed = 32
     np.random.seed(seed)
     cp.random.seed(seed)
     for data_name, data in datasets_set.items():
         model, X_background, X_foreground, exact_shap_values = data
+        model_predict = lambda X: model.get_booster().inplace_predict(X, predict_type='margin')
         n_features = X_background.shape[1]
+        df = pd.DataFrame(columns=["Algorithm", "Function evals", "Trial", "rmse"])
         for alg_name, alg in algorithms_set.items():
-            errors = []
             min_samples = algorithms.min_sample_size(alg, n_features)
-            # eval_schedule = [min_samples * 2 ** x for x in range(0, 10) if
-            #                  min_samples * 2 ** x <= max_evals]
-            eval_schedule = [10 ** (x/2) for x in range(1, 15)]
-            eval_schedule = (np.round(np.divide(eval_schedule, min_samples)) * min_samples).astype(int)
+            eval_schedule = [10 ** (x / 5) for x in range(1, 20)]
+            eval_schedule = (np.round(np.divide(eval_schedule, min_samples)) * min_samples).astype(
+                int)
             eval_schedule = eval_schedule[eval_schedule >= min_samples]
             eval_schedule = eval_schedule[eval_schedule <= max_evals]
 
             for evals in tqdm(eval_schedule, desc="Dataset - " + data_name + ", Alg - " + alg_name):
-                repeats_error = []
-                for _ in range(repeats):
+                required_repeats = repeats
+                if alg_name in deterministic_algorithms:
+                    required_repeats = 1
+                for i in range(required_repeats):
                     shap_values = alg(X_background, X_foreground,
-                                      model.get_booster().inplace_predict,
+                                      model_predict,
                                       evals)
-                    repeats_error.append(rmse(shap_values, exact_shap_values))
-                errors.append(np.mean(repeats_error))
-            plt.plot(eval_schedule, errors, label=alg_name)
-        plt.legend()
-        plt.xlabel('function_evals')
-        plt.ylabel('rmse')
+                    df = df.append({"Algorithm": alg_name, "Function evals": evals, "Trial": i,
+                                    "rmse": rmse(shap_values, exact_shap_values)},
+                                   ignore_index=True)
+        sns.lineplot(data=df, x="Function evals", y="rmse", hue="Algorithm")
         plt.xscale('log')
         plt.yscale('log')
-        plt.tight_layout()
         plt.savefig('figures/' + data_name + '_shap.png')
         plt.clf()
 
