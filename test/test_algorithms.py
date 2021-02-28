@@ -4,32 +4,32 @@ import algorithms
 import numpy as np
 import sklearn
 
-all_algorithms = [algorithms.castro, algorithms.castro_complement, algorithms.owen,
+all_algorithms = [algorithms.monte_carlo, algorithms.monte_carlo_antithetic, algorithms.owen,
                   algorithms.owen_complement, algorithms.castro_stratified,
-                  algorithms.castro_qmc, algorithms.castro_qmc,
-                  algorithms.castro_lhs,
-                  algorithms.kt_herding, algorithms.spearman_herding,
-                  algorithms.castro_control_variate, algorithms.orthogonal]
+                  algorithms.qmc_sobol, algorithms.qmc_sobol,
+                  algorithms.kt_herding,
+                  algorithms.castro_control_variate, algorithms.orthogonal, algorithms.fibonacci]
 
-efficient_algorithms = [algorithms.castro, algorithms.castro_complement, algorithms.castro_qmc,
-                        algorithms.castro_lhs, algorithms.kt_herding, algorithms.spearman_herding,
-                        algorithms.orthogonal]
+efficient_algorithms = [algorithms.monte_carlo, algorithms.monte_carlo_antithetic,
+                        algorithms.qmc_sobol,
+                        algorithms.kt_herding,
+                        algorithms.orthogonal, algorithms.fibonacci]
 
-algorithms_with_consistent_function_calls = [algorithms.castro, algorithms.castro_complement,
+algorithms_with_consistent_function_calls = [algorithms.monte_carlo,
+                                             algorithms.monte_carlo_antithetic,
                                              algorithms.owen,
                                              algorithms.owen_complement,
-                                             algorithms.global_stratified,
-                                             algorithms.global_stratified_complement,
-                                             algorithms.castro_stratified, algorithms.castro_qmc,
-                                             algorithms.castro_lhs, algorithms.kt_herding,
-                                             algorithms.spearman_herding, algorithms.orthogonal]
+                                             algorithms.castro_stratified, algorithms.qmc_sobol,
+                                             algorithms.kt_herding,
+                                             algorithms.orthogonal,
+                                             algorithms.fibonacci]
 
-algorithms_exact_linear_model = [algorithms.castro, algorithms.castro_complement, algorithms.owen,
+algorithms_exact_linear_model = [algorithms.monte_carlo, algorithms.monte_carlo_antithetic,
+                                 algorithms.owen,
                                  algorithms.owen_complement, algorithms.castro_stratified,
-                                 algorithms.castro_qmc, algorithms.castro_qmc,
-                                 algorithms.castro_lhs,
-                                 algorithms.kt_herding, algorithms.spearman_herding,
-                                 algorithms.orthogonal]
+                                 algorithms.qmc_sobol, algorithms.qmc_sobol,
+                                 algorithms.kt_herding,
+                                 algorithms.orthogonal, algorithms.fibonacci]
 
 
 @pytest.mark.parametrize("data", [datasets.get_cal_housing(5, 10), datasets.get_regression(5, 10)])

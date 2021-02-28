@@ -21,22 +21,23 @@ def plot_experiments():
     repeats = 25
     foreground_examples = 10
     background_examples = 100
-    max_evals = 1000
+    max_evals = 100000
     datasets_set = {
-        # "make_regression": datasets.get_regression(foreground_examples, background_examples),
+        "make_regression": datasets.get_regression(foreground_examples, background_examples),
         "cal_housing": datasets.get_cal_housing(foreground_examples, background_examples),
-        # "adult": datasets.get_adult(foreground_examples, background_examples),
-        # "breast_cancer": datasets.get_breast_cancer(foreground_examples, background_examples),
+        "adult": datasets.get_adult(foreground_examples, background_examples),
+        "breast_cancer": datasets.get_breast_cancer(foreground_examples, background_examples),
     }
     algorithms_set = {
-        "Castro": algorithms.castro,
-        "Castro-Complement": algorithms.castro_complement,
+        "Castro": algorithms.monte_carlo,
+        "Castro-Complement": algorithms.monte_carlo_antithetic,
         # "Castro-LHS": algorithms.castro_lhs,
     }
     algorithms_set = {
         # "Castro": algorithms.castro,
         "Castro-Orthogonal": algorithms.orthogonal,
-        "Castro-Complement": algorithms.castro_complement,
+        "Castro-Complement": algorithms.monte_carlo_antithetic,
+        "Fibonacci": algorithms.fibonacci,
         # "Castro-ControlVariate": algorithms.castro_control_variate,
         # "Castro-QMC": algorithms.castro_qmc,
         # "KT-Herding": algorithms.kt_herding,
@@ -44,7 +45,7 @@ def plot_experiments():
         # "Spearman-Herding-Exact": algorithms.spearman_herding_exact,
     }
 
-    deterministic_algorithms = ["Castro-QMC"]
+    deterministic_algorithms = ["Castro-QMC","Fibonacci"]
 
     seed = 32
     np.random.seed(seed)
@@ -70,10 +71,10 @@ def plot_experiments():
                     shap_values = alg(X_background, X_foreground,
                                       model_predict,
                                       evals)
-                    df = df.append({"Algorithm": alg_name, "Function evals": evals, "Trial": i,
+                    df = df.append({"Algorithm": alg_name, "n_permutations": evals/(n_features+1), "Trial": i,
                                     "rmse": rmse(shap_values, exact_shap_values)},
                                    ignore_index=True)
-        sns.lineplot(data=df, x="Function evals", y="rmse", hue="Algorithm")
+        sns.lineplot(data=df, x="n_permutations", y="rmse", hue="Algorithm")
         plt.xscale('log')
         plt.yscale('log')
         plt.savefig('figures/' + data_name + '_shap.png')

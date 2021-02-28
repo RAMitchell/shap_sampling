@@ -2,6 +2,9 @@ import numpy as np
 from numba import njit
 import sobol_seq
 import kernel_herding
+from itertools import count
+from math import cos, gamma, pi, sin, sqrt
+from typing import Callable, Iterator, List
 
 
 @njit
@@ -108,7 +111,7 @@ def estimate_shap_given_permutations(X_background, X_foreground, predict_functio
     return phi
 
 
-def castro(X_background, X_foreground, predict_function, n_samples):
+def monte_carlo(X_background, X_foreground, predict_function, n_samples):
     n_features = X_background.shape[1]
 
     assert n_samples % (n_features + 1) == 0
@@ -120,7 +123,7 @@ def castro(X_background, X_foreground, predict_function, n_samples):
     return estimate_shap_given_permutations(X_background, X_foreground, predict_function, p)
 
 
-def castro_complement(X_background, X_foreground, predict_function, n_samples):
+def monte_carlo_antithetic(X_background, X_foreground, predict_function, n_samples):
     n_features = X_background.shape[1]
 
     assert n_samples % (2 * (n_features + 1)) == 0
@@ -139,7 +142,7 @@ def castro_complement(X_background, X_foreground, predict_function, n_samples):
     return estimate_shap_given_permutations(X_background, X_foreground, predict_function, p)
 
 
-def castro_qmc(X_background, X_foreground, predict_function, n_samples):
+def qmc_sobol(X_background, X_foreground, predict_function, n_samples):
     n_features = X_background.shape[1]
 
     assert n_samples % (n_features + 1) == 0
@@ -149,139 +152,10 @@ def castro_qmc(X_background, X_foreground, predict_function, n_samples):
     return estimate_shap_given_permutations(X_background, X_foreground, predict_function, p)
 
 
-# Transform samples from [0,1) into permutations using Fisher Yates encoding
-def real_samples_to_permutations(X, n_features):
-    n_samples = X.shape[0]
-    p = np.tile(np.arange(0, n_features), (n_samples, 1))
-    for i in range(n_samples):
-        for j in range(n_features - 1, 0, -1):
-            k = min(int(X[i][j - 1] * (j + 1)), j)
-            tmp = p[i][j]
-            p[i][j] = p[i][k]
-            p[i][k] = tmp
-    return p
-
-
-def sobol_fy_permutations(n_samples, n_features):
-    sobol = sobol_seq.i4_sobol_generate(n_features - 1, n_samples)
-    return real_samples_to_permutations(sobol, n_features)
-
-
 def sobol_sphere_permutations(n_samples, n_features):
     sobol = sobol_seq.i4_sobol_generate(n_features, n_samples)
 
     return np.argsort(sobol, axis=1)
-
-
-def get_lhs_permutations(n_samples, n_features):
-    d_permutations = np.array([np.random.permutation(n_samples) for _ in range(n_features - 1)])
-    X = np.zeros((n_samples, n_features - 1))
-    for i in range(n_samples):
-        for j in range(n_features - 1):
-            X[i, j] = (d_permutations[j][i] + np.random.random()) / n_samples
-
-    return real_samples_to_permutations(X, n_features)
-
-
-def castro_lhs(X_background, X_foreground, predict_function, n_samples):
-    n_features = X_background.shape[1]
-
-    assert n_samples % (n_features + 1) == 0
-    # castro is allowed to take 2 * more samples than owen as it reuses predictions
-    samples_per_feature = 2 * (n_samples // (n_features + 1))
-    p = get_lhs_permutations(samples_per_feature, n_features)
-    return estimate_shap_given_permutations(X_background, X_foreground, predict_function, p)
-
-
-@njit
-def accumulate_samples_simple(y, n_features, phi, n_samples, n_foreground, s, mask):
-    for foreground_idx in range(n_foreground):
-        phi_on = np.zeros((n_features, n_features))
-        phi_on_count = np.zeros((n_features, n_features))
-        phi_off = np.zeros((n_features, n_features))
-        phi_off_count = np.zeros((n_features, n_features))
-        for sample_idx in range(n_samples):
-            num_on = s[sample_idx]
-            for j in range(n_features):
-                if mask[sample_idx][j]:
-                    phi_on[j, num_on - 1] += y[foreground_idx][sample_idx]
-                    phi_on_count[j, num_on - 1] += 1
-                else:
-                    phi_off[j, num_on] += y[foreground_idx][sample_idx]
-                    phi_off_count[j, num_on] += 1
-
-        # avoid divide by 0
-        for i in range(n_features):
-            for j in range(n_features):
-                if phi_on_count[i][j] == 0:
-                    phi_on_count[i][j] = 1
-                if phi_off_count[i][j] == 0:
-                    phi_off_count[i][j] = 1
-
-        strata_on = np.divide(phi_on, phi_on_count)
-        strata_off = np.divide(phi_off, phi_off_count)
-
-        mean_on = np.zeros(n_features)
-        mean_off = np.zeros(n_features)
-        for i in range(n_features):
-            mean_on[i] = strata_on[i].mean()
-            mean_off[i] = strata_off[i].mean()
-
-        phi[foreground_idx] = mean_on - mean_off
-
-
-def global_stratified(X_background, X_foreground, predict_function, n_samples):
-    # Algorithm doesn't compute on/off pairs, so gets extra samples
-    n_samples *= 2
-    n_features = X_background.shape[1]
-    phi = np.zeros((X_foreground.shape[0], n_features))
-    assert n_samples % (n_features + 1) == 0
-
-    # generate stratified samples uniformly
-    mask = np.zeros((n_samples, n_features)).astype(bool)
-    for i in range(n_samples):
-        s_len = i % (n_features + 1)
-        mask[i, 0:s_len] = True
-        mask[i] = np.random.permutation(mask[i])
-
-    masked_dataset = mask_dataset(mask, X_background, X_foreground)
-    s = mask.sum(axis=1)
-    y = predict_function(masked_dataset).reshape(
-        (X_foreground.shape[0], mask.shape[0], X_background.shape[0]))
-    # average the background samples
-    y = y.mean(axis=2)
-    accumulate_samples_simple(y, n_features, phi, n_samples, X_foreground.shape[0], s, mask)
-
-    return phi
-
-
-def global_stratified_complement(X_background, X_foreground, predict_function, n_samples):
-    # Algorithm doesn't compute on/off pairs, so gets extra samples
-    n_samples *= 2
-    n_features = X_background.shape[1]
-    phi = np.zeros((X_foreground.shape[0], n_features))
-    assert n_samples % (2 * (n_features + 1)) == 0
-
-    # generate stratified samples uniformly
-    mask = np.zeros((n_samples, n_features)).astype(bool)
-    for i in range(n_samples // 2):
-        s_len = i % (n_features + 1)
-        mask[i, 0:s_len] = True
-        mask[i] = np.random.permutation(mask[i])
-
-    # generate complement
-    mask[n_samples // 2:] = np.invert(mask[0:n_samples // 2])
-
-    masked_dataset = mask_dataset(mask, X_background, X_foreground)
-    s = mask.sum(axis=1)
-    y = predict_function(masked_dataset).reshape(
-        (X_foreground.shape[0], mask.shape[0], X_background.shape[0]))
-    # average the background samples
-    y = y.mean(axis=2)
-    accumulate_samples_simple(y, n_features, phi, n_samples, X_foreground.shape[0], s, mask)
-
-    return phi
-
 
 # sample with l ones and i off
 def draw_castro_stratified_samples(n_samples, n_features, i, l):
@@ -389,7 +263,7 @@ def castro_control_variate(X_background, X_foreground, predict_function, n_sampl
     difference_predict = lambda X: predict_function(X) - beta * tree_model.predict(X)
     tree_explainer = shap.TreeExplainer(tree_model, X_background)
     tree_phi = tree_explainer.shap_values(X_foreground, check_additivity=False)
-    phi = castro(X_background, X_foreground, difference_predict, n_samples)
+    phi = monte_carlo(X_background, X_foreground, difference_predict, n_samples)
     return phi + tree_phi * beta
 
 
@@ -402,38 +276,28 @@ def kt_herding(X_background, X_foreground, predict_function, n_samples):
     return estimate_shap_given_permutations(X_background, X_foreground, predict_function, p)
 
 
-def spearman_herding(X_background, X_foreground, predict_function, n_samples):
-    n_features = X_background.shape[1]
-    assert n_samples % (n_features + 1) == 0
-    # castro is allowed to take 2 * more samples than owen as it reuses predictions
-    samples_per_feature = 2 * (n_samples // (n_features + 1))
-    p = kernel_herding.spearman_kernel_herding_permutations(samples_per_feature, n_features)
-    return estimate_shap_given_permutations(X_background, X_foreground, predict_function, p)
-
-
-def spearman_herding_exact(X_background, X_foreground, predict_function, n_samples):
-    n_features = X_background.shape[1]
-    assert n_samples % (n_features + 1) == 0
-    # castro is allowed to take 2 * more samples than owen as it reuses predictions
-    samples_per_feature = 2 * (n_samples // (n_features + 1))
-    p = kernel_herding.spearman_kernel_herding_permutations_exact(samples_per_feature, n_features)
-    return estimate_shap_given_permutations(X_background, X_foreground, predict_function, p)
-
-
 def _sample_sphere(ndim):
     vec = np.random.randn(ndim)
     vec /= np.linalg.norm(vec, axis=0)
     return vec
 
 
-def _gram_schmidt_permutations(n_orthogonal_samples, n_features):
-    assert n_orthogonal_samples < n_features
+def get_orthogonal_vectors(n_orthogonal_samples, n_features):
     A = np.zeros((n_orthogonal_samples, n_features))
+    n = np.ones(n_features)
+    n /= np.linalg.norm(n)
     for i in range(n_orthogonal_samples):
         A[i] = _sample_sphere(n_features)
+        A[i, :] -= np.dot(n, A[i, :]) * n
         for k in range(i):
             A[i, :] -= np.dot(A[k, :], A[i, :]) * A[k, :]
         A[i, :] = A[i, :] / np.linalg.norm(A[i, :])
+    return A
+
+
+def _gram_schmidt_permutations(n_orthogonal_samples, n_features):
+    assert n_orthogonal_samples < n_features
+    A = get_orthogonal_vectors(n_orthogonal_samples, n_features)
     p = np.zeros(A.shape, dtype=np.int64)
     for i in range(n_orthogonal_samples):
         p[i] = np.argsort(A[i])
@@ -466,31 +330,128 @@ def orthogonal(X_background, X_foreground, predict_function, n_samples):
     return estimate_shap_given_permutations(X_background, X_foreground, predict_function, p)
 
 
+def _int_sin_m(x: float, m: int) -> float:
+    """Computes the integral of sin^m(t) dt from 0 to x recursively"""
+    if m == 0:
+        return x
+    elif m == 1:
+        return 1 - cos(x)
+    else:
+        return (m - 1) / m * _int_sin_m(x, m - 2) - cos(x) * sin(x) ** (
+                m - 1
+        ) / m
+
+
+def _primes() -> Iterator[int]:
+    """Returns an infinite generator of prime numbers"""
+    yield from (2, 3, 5, 7)
+    composites = {}
+    ps = _primes()
+    next(ps)
+    p = next(ps)
+    assert p == 3
+    psq = p * p
+    for i in count(9, 2):
+        if i in composites:  # composite
+            step = composites.pop(i)
+        elif i < psq:  # prime
+            yield i
+            continue
+        else:  # composite, = p*p
+            assert i == psq
+            step = 2 * p
+            p = next(ps)
+            psq = p * p
+        i += step
+        while i in composites:
+            i += step
+        composites[i] = step
+
+
+def _inverse_increasing(
+        func: Callable[[float], float],
+        target: float,
+        lower: float,
+        upper: float,
+        atol: float = 1e-10,
+) -> float:
+    """Returns func inverse of target between lower and upper
+
+    inverse is accurate to an absolute tolerance of atol, and
+    must be monotonically increasing over the interval lower
+    to upper
+    """
+    mid = (lower + upper) / 2
+    approx = func(mid)
+    while abs(approx - target) > atol:
+        if approx > target:
+            upper = mid
+        else:
+            lower = mid
+        mid = (upper + lower) / 2
+        approx = func(mid)
+    return mid
+
+
+def uniform_hypersphere(d: int, n: int) -> List[List[float]]:
+    """Generate n points over the d dimensional hypersphere"""
+    assert d > 1
+    assert n > 0
+    points = [[1 for _ in range(d)] for _ in range(n)]
+    for i in range(n):
+        t = 2 * pi * i / n
+        points[i][0] *= sin(t)
+        points[i][1] *= cos(t)
+    for dim, prime in zip(range(2, d), _primes()):
+        offset = sqrt(prime)
+        mult = gamma(dim / 2 + 0.5) / gamma(dim / 2) / sqrt(pi)
+
+        def dim_func(y):
+            return mult * _int_sin_m(y, dim - 1)
+
+        for i in range(n):
+            deg = _inverse_increasing(dim_func, i * offset % 1, 0, pi)
+            for j in range(dim):
+                points[i][j] *= sin(deg)
+            points[i][dim] *= cos(deg)
+    return np.array(points)
+
+
+def zero_sum_projection(d):
+    basis = np.array([[1.0] * i + [-i] + [0.0] * (d - i - 1) for i in range(1, d)])
+    return np.array([v / np.linalg.norm(v) for v in basis])
+
+
+def fibonacci(X_background, X_foreground, predict_function, n_samples):
+    n_features = X_background.shape[1]
+    assert n_samples % (n_features + 1) == 0
+    samples_per_feature = 2 * (n_samples // (n_features + 1))
+    sphere_points = uniform_hypersphere(n_features - 1, samples_per_feature)
+    basis = zero_sum_projection(n_features)
+    projected_sphere_points = sphere_points.dot(basis)
+    p = np.zeros((samples_per_feature, n_features), dtype=np.int64)
+    for i in range(samples_per_feature):
+        p[i] = np.argsort(projected_sphere_points[i])
+    return estimate_shap_given_permutations(X_background, X_foreground, predict_function, p)
+
+
 def min_sample_size(alg, n_features):
-    if alg == castro:
+    if alg == monte_carlo:
         return n_features + 1
-    elif alg == castro_qmc:
+    elif alg == qmc_sobol:
         return n_features + 1
-    elif alg == castro_lhs:
+    elif alg == fibonacci:
         return n_features + 1
     elif alg == kt_herding:
         return n_features + 1
-    elif alg == spearman_herding:
-        return n_features + 1
-    elif alg == spearman_herding_exact:
-        return n_features + 1
     elif alg == castro_control_variate:
         return n_features + 1
-    elif alg == castro_complement:
+    elif alg == monte_carlo_antithetic:
         return 2 * (n_features + 1)
     elif alg == orthogonal:
         return 2 * (n_features + 1)
     elif alg == owen or alg == owen_complement:
         return n_features * 4
-    elif alg == global_stratified:
-        return n_features + 1
-    elif alg == global_stratified_complement:
-        return 2 * (n_features + 1)
     elif alg == castro_stratified:
         return 2 * (n_features ** 2)
     else:
