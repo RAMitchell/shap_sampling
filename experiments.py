@@ -21,7 +21,7 @@ def plot_experiments():
     repeats = 25
     foreground_examples = 10
     background_examples = 100
-    max_evals = 100000
+    max_evals = 5000
     datasets_set = {
         "make_regression": datasets.get_regression(foreground_examples, background_examples),
         "cal_housing": datasets.get_cal_housing(foreground_examples, background_examples),
@@ -29,15 +29,13 @@ def plot_experiments():
         "breast_cancer": datasets.get_breast_cancer(foreground_examples, background_examples),
     }
     algorithms_set = {
-        "Castro": algorithms.monte_carlo,
-        "Castro-Complement": algorithms.monte_carlo_antithetic,
-        # "Castro-LHS": algorithms.castro_lhs,
-    }
-    algorithms_set = {
-        # "Castro": algorithms.castro,
-        "Castro-Orthogonal": algorithms.orthogonal,
-        "Castro-Complement": algorithms.monte_carlo_antithetic,
-        "Fibonacci": algorithms.fibonacci,
+        # "MC": algorithms.monte_carlo,
+        # "Bayesian-MC": algorithms.monte_carlo_weighted,
+        "SBQ": algorithms.sbq,
+        # "MC-Orthogonal-Bayesian": algorithms.orthogonal_weighted,
+        "MC-Orthogonal": algorithms.orthogonal,
+        # "Castro-Complement": algorithms.monte_carlo_antithetic,
+        # "Fibonacci": algorithms.fibonacci,
         # "Castro-ControlVariate": algorithms.castro_control_variate,
         # "Castro-QMC": algorithms.castro_qmc,
         # "KT-Herding": algorithms.kt_herding,

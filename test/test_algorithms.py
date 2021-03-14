@@ -8,12 +8,14 @@ all_algorithms = [algorithms.monte_carlo, algorithms.monte_carlo_antithetic, alg
                   algorithms.owen_complement, algorithms.castro_stratified,
                   algorithms.qmc_sobol, algorithms.qmc_sobol,
                   algorithms.kt_herding,
-                  algorithms.castro_control_variate, algorithms.orthogonal, algorithms.fibonacci]
+                  algorithms.castro_control_variate, algorithms.orthogonal, algorithms.fibonacci,
+                  algorithms.monte_carlo_weighted, algorithms.sbq]
 
 efficient_algorithms = [algorithms.monte_carlo, algorithms.monte_carlo_antithetic,
                         algorithms.qmc_sobol,
                         algorithms.kt_herding,
-                        algorithms.orthogonal, algorithms.fibonacci]
+                        algorithms.orthogonal, algorithms.fibonacci,
+                        algorithms.monte_carlo_weighted, algorithms.sbq]
 
 algorithms_with_consistent_function_calls = [algorithms.monte_carlo,
                                              algorithms.monte_carlo_antithetic,
@@ -22,14 +24,16 @@ algorithms_with_consistent_function_calls = [algorithms.monte_carlo,
                                              algorithms.castro_stratified, algorithms.qmc_sobol,
                                              algorithms.kt_herding,
                                              algorithms.orthogonal,
-                                             algorithms.fibonacci]
+                                             algorithms.fibonacci,
+                                             algorithms.monte_carlo_weighted, algorithms.sbq]
 
 algorithms_exact_linear_model = [algorithms.monte_carlo, algorithms.monte_carlo_antithetic,
                                  algorithms.owen,
                                  algorithms.owen_complement, algorithms.castro_stratified,
                                  algorithms.qmc_sobol, algorithms.qmc_sobol,
                                  algorithms.kt_herding,
-                                 algorithms.orthogonal, algorithms.fibonacci]
+                                 algorithms.orthogonal, algorithms.fibonacci,
+                                 algorithms.monte_carlo_weighted, algorithms.sbq]
 
 
 @pytest.mark.parametrize("data", [datasets.get_cal_housing(5, 10), datasets.get_regression(5, 10)])
@@ -132,3 +136,5 @@ def test_castro_stratified():
                                                        3) * i)
         errors.append(rmse(exact_shap_values, shap_values))
     assert np.all(np.diff(errors) < 0)
+
+

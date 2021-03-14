@@ -126,7 +126,7 @@ def mayavi_plot_cayley_orthogonal():
 
 def plot_fibonacci_sphere():
     from plotoptix import TkOptiX
-    from algorithms import uniform_hypersphere
+    from spherical_fibonacci import fibonacci_points
     from plotoptix.materials import m_clear_glass, m_plastic, m_matt_glass
 
     optix = TkOptiX()  # create and configure, show the window later
@@ -136,7 +136,7 @@ def plot_fibonacci_sphere():
     optix.setup_material("matt", m_matt_glass)
     optix.set_param(max_accumulation_frames=300)
 
-    points = uniform_hypersphere(3, 100)
+    points = fibonacci_points(100, 3)
 
     optix.set_data("fibonacci", pos=points, r=0.04, c=(0.5, 0.5, 1.0), mat="plastic")
     optix.set_data("sphere", pos=[(0, 0, 0)], r=1.0, c=(0.9, 0.9, 0.9), mat="plastic")
@@ -162,5 +162,5 @@ def plot_fibonacci_sphere():
 
 
 # mayavi_plot_cayley()
-mayavi_plot_cayley_orthogonal()
-# plot_fibonacci_sphere()
+# mayavi_plot_cayley_orthogonal()
+plot_fibonacci_sphere()

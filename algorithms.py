@@ -1,7 +1,7 @@
 import numpy as np
 from numba import njit
 import sobol_seq
-import kernel_herding
+import kernel_methods
 from itertools import count
 from math import cos, gamma, pi, sin, sqrt
 from typing import Callable, Iterator, List
@@ -84,14 +84,16 @@ def owen_complement(X_background, X_foreground, predict_function, n_samples):
 
 
 @njit
-def _accumulate_samples_castro(phi, predictions, j):
+def _accumulate_samples_castro(phi, predictions, j, weights=None):
+    if weights == None:
+        weights = np.full(predictions.shape[1], 1 / predictions.shape[1])
     for foreground_idx in range(predictions.shape[0]):
         for sample_idx in range(predictions.shape[1]):
             phi[foreground_idx, j[sample_idx]] += predictions[foreground_idx][
-                                                      sample_idx] / predictions.shape[1]
+                                                      sample_idx] * weights[sample_idx]
 
 
-def estimate_shap_given_permutations(X_background, X_foreground, predict_function, p):
+def estimate_shap_given_permutations(X_background, X_foreground, predict_function, p, weights=None):
     n_features = X_background.shape[1]
     phi = np.zeros((X_foreground.shape[0], n_features))
     n_permutations = p.shape[0]
@@ -105,7 +107,7 @@ def estimate_shap_given_permutations(X_background, X_foreground, predict_functio
         predictions = (pred_on - pred_off).reshape(
             (X_foreground.shape[0], mask.shape[0], X_background.shape[0]))
         predictions = np.mean(predictions, axis=2)
-        _accumulate_samples_castro(phi, predictions, j)
+        _accumulate_samples_castro(phi, predictions, j, weights)
         pred_off = pred_on
 
     return phi
@@ -121,6 +123,28 @@ def monte_carlo(X_background, X_foreground, predict_function, n_samples):
     for i in range(samples_per_feature):
         p[i] = np.random.permutation(n_features)
     return estimate_shap_given_permutations(X_background, X_foreground, predict_function, p)
+
+
+def monte_carlo_weighted(X_background, X_foreground, predict_function, n_samples):
+    n_features = X_background.shape[1]
+    assert n_samples % (n_features + 1) == 0
+    # castro is allowed to take 2 * more samples than owen as it reuses predictions
+    samples_per_feature = 2 * (n_samples // (n_features + 1))
+    p = np.zeros((samples_per_feature, n_features), dtype=np.int64)
+    for i in range(samples_per_feature):
+        p[i] = np.random.permutation(n_features)
+    weights = kernel_methods.compute_bayesian_weights(p, kernel_methods.kt_kernel)
+    return estimate_shap_given_permutations(X_background, X_foreground, predict_function, p,
+                                            weights)
+
+
+def sbq(X_background, X_foreground, predict_function, n_samples):
+    n_features = X_background.shape[1]
+    assert n_samples % (n_features + 1) == 0
+    samples_per_feature = 2 * (n_samples // (n_features + 1))
+    p, w = kernel_methods.sequential_bayesian_quadrature(samples_per_feature, n_features)
+    return estimate_shap_given_permutations(X_background, X_foreground, predict_function, p,
+                                            w)
 
 
 def monte_carlo_antithetic(X_background, X_foreground, predict_function, n_samples):
@@ -156,6 +180,7 @@ def sobol_sphere_permutations(n_samples, n_features):
     sobol = sobol_seq.i4_sobol_generate(n_features, n_samples)
 
     return np.argsort(sobol, axis=1)
+
 
 # sample with l ones and i off
 def draw_castro_stratified_samples(n_samples, n_features, i, l):
@@ -272,7 +297,7 @@ def kt_herding(X_background, X_foreground, predict_function, n_samples):
     assert n_samples % (n_features + 1) == 0
     # castro is allowed to take 2 * more samples than owen as it reuses predictions
     samples_per_feature = 2 * (n_samples // (n_features + 1))
-    p = kernel_herding.kt_herding_permutations(samples_per_feature, n_features)
+    p = kernel_methods.kt_herding_permutations(samples_per_feature, n_features)
     return estimate_shap_given_permutations(X_background, X_foreground, predict_function, p)
 
 
@@ -328,6 +353,16 @@ def orthogonal(X_background, X_foreground, predict_function, n_samples):
     samples_per_feature = 2 * (n_samples // (n_features + 1))
     p = _orthogonal_permutations(samples_per_feature, n_features)
     return estimate_shap_given_permutations(X_background, X_foreground, predict_function, p)
+
+
+def orthogonal_weighted(X_background, X_foreground, predict_function, n_samples):
+    n_features = X_background.shape[1]
+    assert n_samples % (2 * (n_features + 1)) == 0
+    # castro is allowed to take 2 * more samples than owen as it reuses predictions
+    samples_per_feature = 2 * (n_samples // (n_features + 1))
+    p = _orthogonal_permutations(samples_per_feature, n_features)
+    w = kernel_methods.compute_bayesian_weights(p, kernel_methods.kt_kernel)
+    return estimate_shap_given_permutations(X_background, X_foreground, predict_function, p, w)
 
 
 def _int_sin_m(x: float, m: int) -> float:
@@ -438,6 +473,10 @@ def fibonacci(X_background, X_foreground, predict_function, n_samples):
 def min_sample_size(alg, n_features):
     if alg == monte_carlo:
         return n_features + 1
+    elif alg == monte_carlo_weighted:
+        return n_features + 1
+    elif alg == sbq:
+        return n_features + 1
     elif alg == qmc_sobol:
         return n_features + 1
     elif alg == fibonacci:
@@ -449,6 +488,8 @@ def min_sample_size(alg, n_features):
     elif alg == monte_carlo_antithetic:
         return 2 * (n_features + 1)
     elif alg == orthogonal:
+        return 2 * (n_features + 1)
+    elif alg == orthogonal_weighted:
         return 2 * (n_features + 1)
     elif alg == owen or alg == owen_complement:
         return n_features * 4
