@@ -6,7 +6,7 @@ import numpy as np
 
 def get_regression(n_foreground, n_background):
     X, y = sklearn.datasets.make_regression(
-        n_samples=100,
+        n_samples=1000,
         n_features=10,
         noise=0.1,
         random_state=47)

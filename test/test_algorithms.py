@@ -3,37 +3,42 @@ import datasets
 import algorithms
 import numpy as np
 import sklearn
+import kernel_methods
 
-all_algorithms = [algorithms.monte_carlo, algorithms.monte_carlo_antithetic, algorithms.owen,
-                  algorithms.owen_complement, algorithms.castro_stratified,
-                  algorithms.qmc_sobol, algorithms.qmc_sobol,
-                  algorithms.kt_herding,
-                  algorithms.castro_control_variate, algorithms.orthogonal, algorithms.fibonacci,
-                  algorithms.monte_carlo_weighted, algorithms.sbq]
+all_algorithms = [algorithms.MonteCarlo(), algorithms.MonteCarloAntithetic(), algorithms.Owen(),
+                  algorithms.OwenHalved(), algorithms.Stratified(),
+                  algorithms.KernelHerding(kernel_methods.MallowsKernel()),
+                  algorithms.ControlVariate(algorithms.MonteCarlo()),
+                  algorithms.OrthogonalSphericalCodes(), algorithms.Sobol(),
+                  algorithms.BayesianQuadrature(kernel_methods.MallowsKernel()),
+                  algorithms.SequentialBayesianQuadrature(kernel_methods.MallowsKernel())]
 
-efficient_algorithms = [algorithms.monte_carlo, algorithms.monte_carlo_antithetic,
-                        algorithms.qmc_sobol,
-                        algorithms.kt_herding,
-                        algorithms.orthogonal, algorithms.fibonacci,
-                        algorithms.monte_carlo_weighted, algorithms.sbq]
+efficient_algorithms = [algorithms.MonteCarlo(), algorithms.MonteCarloAntithetic(),
+                        algorithms.KernelHerding(kernel_methods.MallowsKernel()),
+                        algorithms.OrthogonalSphericalCodes(), algorithms.Sobol(),
+                        ]
 
-algorithms_with_consistent_function_calls = [algorithms.monte_carlo,
-                                             algorithms.monte_carlo_antithetic,
-                                             algorithms.owen,
-                                             algorithms.owen_complement,
-                                             algorithms.castro_stratified, algorithms.qmc_sobol,
-                                             algorithms.kt_herding,
-                                             algorithms.orthogonal,
-                                             algorithms.fibonacci,
-                                             algorithms.monte_carlo_weighted, algorithms.sbq]
+algorithms_with_consistent_function_calls = [algorithms.MonteCarlo(),
+                                             algorithms.MonteCarloAntithetic(),
+                                             algorithms.Owen(),
+                                             algorithms.OwenHalved(),
+                                             algorithms.Stratified(),
+                                             algorithms.KernelHerding(
+                                                 kernel_methods.MallowsKernel()),
+                                             algorithms.OrthogonalSphericalCodes(),
+                                             algorithms.Sobol(),
+                                             algorithms.BayesianQuadrature(
+                                                 kernel_methods.MallowsKernel()),
+                                             algorithms.SequentialBayesianQuadrature(
+                                                 kernel_methods.MallowsKernel())]
 
-algorithms_exact_linear_model = [algorithms.monte_carlo, algorithms.monte_carlo_antithetic,
-                                 algorithms.owen,
-                                 algorithms.owen_complement, algorithms.castro_stratified,
-                                 algorithms.qmc_sobol, algorithms.qmc_sobol,
-                                 algorithms.kt_herding,
-                                 algorithms.orthogonal, algorithms.fibonacci,
-                                 algorithms.monte_carlo_weighted, algorithms.sbq]
+algorithms_exact_linear_model = [algorithms.MonteCarlo(), algorithms.MonteCarloAntithetic(),
+                                 algorithms.Stratified(),
+                                 algorithms.Owen(),
+                                 algorithms.OwenHalved(),
+                                 algorithms.KernelHerding(kernel_methods.MallowsKernel()),
+                                 algorithms.OrthogonalSphericalCodes(), algorithms.Sobol(),
+                                 ]
 
 
 @pytest.mark.parametrize("data", [datasets.get_cal_housing(5, 10), datasets.get_regression(5, 10)])
@@ -42,8 +47,8 @@ algorithms_exact_linear_model = [algorithms.monte_carlo, algorithms.monte_carlo_
 def test_efficiency(data, alg):
     model, X_background, X_foreground, exact_shap_values = data
     n_features = X_background.shape[1]
-    shap_values = alg(X_background, X_foreground, model.predict,
-                      algorithms.min_sample_size(alg, n_features))
+    shap_values = alg.shap_values(X_background, X_foreground, model.predict,
+                                  alg.min_samples(n_features))
     expected_value = model.predict(X_background).mean()
     y = model.predict(X_foreground)
     shap_sum = shap_values.sum(axis=1) + expected_value
@@ -60,8 +65,8 @@ def test_linear_model(alg):
     # and the effect of the regression coefficient when they are 'on'
     X_background = np.zeros((1, X.shape[1]))
     X_foreground = np.ones((1, X.shape[1]))
-    shap_values = alg(X_background, X_foreground, mod.predict,
-                      algorithms.min_sample_size(alg, X.shape[1]) * 5)
+    shap_values = alg.shap_values(X_background, X_foreground, mod.predict,
+                                  alg.min_samples(X.shape[1]) * 5)
 
     assert np.allclose(mod.coef_, shap_values, rtol=1e-04, atol=1e-04)
 
@@ -84,9 +89,8 @@ def test_num_function_calls(alg):
     X_background = np.zeros((10, 5))
     X_foreground = np.zeros((2, 5))
 
-    min_samples = algorithms.min_sample_size(alg, n_features)
-    alg(X_background, X_foreground, predict, min_samples * 2)
-    assert rows_predict_count == 10 * 2 * 2 * min_samples * 2
+    alg.shap_values(X_background, X_foreground, predict, alg.min_samples(n_features) * 2)
+    assert rows_predict_count == 10 * 2 * 2 * alg.min_samples(n_features) * 2
     rows_predict_count = 0
 
 
@@ -100,8 +104,8 @@ def test_basic(alg):
     X_background = np.zeros((2, n_features))
     X_foreground = np.ones((1, n_features))
     np.random.seed(11)
-    shap_values = alg(X_background, X_foreground, predict,
-                      algorithms.min_sample_size(alg, n_features))
+    shap_values = alg.shap_values(X_background, X_foreground, predict,
+                                  alg.min_samples(n_features))
     assert shap_values[0][0] == 1.0
     assert shap_values[0][1] == 0.0
     assert shap_values[0][2] == 0.0
@@ -129,12 +133,10 @@ def test_castro_stratified():
     exact_shap_values = tree_explainer.shap_values(X_foreground)
 
     errors = []
+    alg = algorithms.Stratified()
     for i in [1, 10, 100]:
-        shap_values = algorithms.castro_stratified(X_background, X_foreground, model.predict,
-                                                   algorithms.min_sample_size(
-                                                       algorithms.castro_stratified,
-                                                       3) * i)
+        shap_values = alg.shap_values(X_background, X_foreground, model.predict,
+                                      alg.min_samples(
+                                          3) * i)
         errors.append(rmse(exact_shap_values, shap_values))
     assert np.all(np.diff(errors) < 0)
-
-

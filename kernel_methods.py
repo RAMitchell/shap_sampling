@@ -8,45 +8,60 @@ def discordant_pairs(a, b):
     n = len(a)
     assert len(b) == n
     discordant = 0
-    a = np.argsort(a)
-    b = np.argsort(b)
+    a_inv = np.argsort(a)
+    b_inv = np.argsort(b)
     for i in range(n):
-        for j in range(n):
-            if (a[i] < a[j] and b[i] > b[j]) or (a[i] > a[j] and b[i] < b[j]):
+        for j in range(i):
+            if (a_inv[i] < a_inv[j] and b_inv[i] > b_inv[j]) or (
+                    a_inv[i] > a_inv[j] and b_inv[i] < b_inv[j]):
                 discordant += 1
     return discordant
 
 
-# n^2 implementation
-@njit
-def kt_kernel(a, b):
-    n = len(a)
-    return 1.0 - 2 * discordant_pairs(a, b) / (n * (n - 1))
+def test_discordant_pairs():
+    d = 20
+    a = np.random.permutation(d)
+    b = np.flip(a)
+    dis = discordant_pairs(a, b)
+    norm_dis = dis / ((d * (d - 1)) / 2)
+    assert norm_dis == 1.0
+    dis = discordant_pairs(a, a)
+    norm_dis = dis / (d * (d - 1) / 2)
+    assert norm_dis == 0.0
 
 
-@njit
-def mallows_kernel(a, b):
-    l = 1.0
-    return np.exp(-l * discordant_pairs(a, b))
+class KTKernel:
+    def __call__(self, a, b):
+        n = len(a)
+        return 1.0 - 4 * discordant_pairs(a, b) / (n * (n - 1))
+
+    def expected_value(self, d):
+        return 0.0
 
 
-# Expected value calculated from moment generating function of the number of inversions in a
-# permutation
-def mallows_expected_value(d, lamb=1.0):
-    mgf_expected = 1.0
-    for j in range(1, d + 1):
-        mgf_expected *= (1 - np.exp(j * -2 * lamb)) / (j * (1 - np.exp(-2 * lamb)))
-    return mgf_expected
+class MallowsKernel:
+    def __init__(self, l=5):
+        self.l = l
+
+    def __call__(self, a, b):
+        d = len(a)
+        norm = (d * (d - 1)) / 2
+        return np.exp(-self.l * discordant_pairs(a, b) / norm)
+
+    def expected_value(self, d):
+        mgf_expected = 1.0
+        norm = (d * (d - 1)) / 2
+        for j in range(1, d + 1):
+            mgf_expected *= (1 - np.exp(j * (-self.l / norm))) / (j * (1 - np.exp(-self.l / norm)))
+        return mgf_expected
 
 
-def test_mallows_expected_value():
-    import itertools
-    d_tests = [3, 4, 5]
-    for d in d_tests:
-        p = np.random.permutation(d)
-        values = list(map(lambda x: mallows_kernel(p, np.array(x)), itertools.permutations(p)))
-        expected = np.mean(values)
-        assert np.isclose(expected, mallows_expected_value(d))
+class SpearmanKernel:
+    def __call__(self, a, b):
+        return a.dot(b)
+
+    def expected_value(self, d):
+        return (d * (d - 1) ** 2) / 4
 
 
 def kt_inverse_feature_map(v, n_features):
@@ -88,38 +103,23 @@ def test_kt_feature_map():
         assert np.all(x == p), (x, p)
 
 
-@njit
-def kt_argmax(w, max_trials, n_features):
+def kernel_argmax(samples, max_trials, n_features, kernel):
     p = np.zeros((max_trials, n_features), dtype=np.int64)
-    scores = np.zeros(max_trials)
+    scores = np.full(max_trials, kernel.expected_value(n_features))
+    n = samples.shape[0]
     for i in range(max_trials):
         p[i] = np.random.permutation(n_features)
-        scores[i] = kt_feature_map(p[i], n_features).dot(w)
+        for s in samples:
+            scores[i] -= 1 / (n + 1) * kernel(p[i], s)
     best_trial = np.argmax(scores)
     return p[best_trial]
 
 
-@njit
-def kt_herding_permutations(n_samples, n_features):
+def kernel_herding(n_samples, n_features, kernel, max_trials):
     p = np.zeros((n_samples, n_features), dtype=np.int64)
-    w = - np.ones(n_features * (n_features - 1) // 2)
-    w /= np.sqrt(len(w))
     for i in range(n_samples):
-        p[i] = kt_argmax(w, 10, n_features)
-        w -= kt_feature_map(p[i], n_features)
+        p[i] = kernel_argmax(p[:i], max_trials, n_features, kernel)
     return p
-
-
-def test_kt_convergence():
-    n_samples_tests = [10, 100, 1000]
-    n_features = 10
-    error = []
-    for n_samples in n_samples_tests:
-        p = kt_herding_permutations(n_samples, n_features)
-        feature_maps = np.array([kt_feature_map(p_i, n_features) for p_i in p])
-        rmse = np.sqrt((feature_maps.mean(axis=0) ** 2).mean())
-        error.append(rmse)
-    assert np.all(np.diff(error) < 0)
 
 
 def compute_bayesian_weights(p, kernel):
@@ -152,8 +152,7 @@ def update_kernel_matrix(K, p, new_p, kernel):
     return K_new
 
 
-def sequential_bayesian_quadrature(n_points, n_features):
-    num_trials = 10
+def sequential_bayesian_quadrature(n_points, n_features, kernel, num_trials):
     # start with a random permutation
     p = [np.random.permutation(n_features)]
     K = np.zeros((n_points, n_points))
@@ -164,15 +163,46 @@ def sequential_bayesian_quadrature(n_points, n_features):
         for j in range(num_trials):
             # Create a trial kernel matrix
             trial_perm = np.random.permutation(n_features)
-            trial_K = update_kernel_matrix(K, p, trial_perm, kt_kernel)
+            trial_K = update_kernel_matrix(K, p, trial_perm, kernel)
             trial_points_var.append(sbq_variance(trial_K[:i + 1, :i + 1]))
             trial_points.append((trial_perm, trial_K))
         best = np.argmin(trial_points_var)
         p.append(trial_points[best][0])
         K = trial_points[best][1]
 
-    z = np.full(n_points, 0.5)
+    z = np.full(n_points, kernel.expected_value(n_features))
     w = np.linalg.lstsq(K, z, rcond=None)[0]
+    w /= w.sum()
     return np.array(p), w
 
-# print(sequential_bayesian_quadrature(20, 5))
+
+def discrepancy(p, w, kernel):
+    n = p.shape[0]
+    d = p.shape[1]
+    if w is None:
+        w = np.full(n, 1 / n)
+    disc = kernel.expected_value(d)
+    for i in range(n):
+        disc -= 2 * w[i] * kernel.expected_value(d)
+    for i in range(n):
+        for j in range(n):
+            disc += w[i] * w[j] * kernel(p[i], p[j])
+    return np.sqrt(disc)
+
+
+def plot_mallows_lambda():
+    import matplotlib.pyplot as plt
+    plt.style.use("seaborn")
+    plt.rc('font', family='serif')
+    x = np.linspace(0, 1, 100)
+    lambdas = [0.5, 5.0, 50]
+    plt.figure(figsize=(4 * 1.3, 3 * 1.3))
+    for l in lambdas:
+        y = np.exp(- x * l)
+        plt.plot(x, y, label="$\lambda={}$".format(l))
+    plt.legend()
+    plt.xlabel("$n_{dis}(\sigma,\sigma')/\\binom{d}{2}$")
+    plt.ylabel("$K_M(\sigma,\sigma')$")
+    plt.tight_layout()
+    plt.savefig('figures/kernel/mallows_lambda.png')
+    plt.show()
